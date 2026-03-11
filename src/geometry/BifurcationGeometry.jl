@@ -28,25 +28,25 @@ function build_segments(params::GeometryParameters)
     inlet_radius = 0.5 * params.inlet_diameter
     branch_radii = 0.5 .* params.branch_diameters
     inlet = BranchSegment(
-        @SVector [0.0, 0.0, -params.inlet_length],
-        @SVector [0.0, 0.0, 1.0],
+        SVector(0.0, 0.0, -params.inlet_length),
+        SVector(0.0, 0.0, 1.0),
         params.inlet_length,
         inlet_radius,
-        :inlet,
+        :inlet
     )
     upper = BranchSegment(
-        @SVector [0.0, 0.0, 0.0],
-        normalize(@SVector [sin(θ), 0.0, cos(θ)]),
+        SVector(0.0, 0.0, 0.0),
+        normalize(SVector(sin(θ), 0.0, cos(θ))),
         params.branch_length,
         branch_radii[1],
-        :branch_a,
+        :branch_a
     )
     lower = BranchSegment(
-        @SVector [0.0, 0.0, 0.0],
-        normalize(@SVector [-sin(θ), 0.0, cos(θ)]),
+        SVector(0.0, 0.0, 0.0),
+        normalize(SVector(-sin(θ), 0.0, cos(θ))),
         params.branch_length,
         branch_radii[2],
-        :branch_b,
+        :branch_b
     )
     return [inlet, upper, lower]
 end
@@ -88,7 +88,7 @@ function build_bifurcation_grid(params::GeometryParameters, numerics::NumericsPa
     segment_id = zeros(Int, length(x), length(y), length(z))
 
     @inbounds for k in eachindex(z), j in eachindex(y), i in eachindex(x)
-        point = @SVector [x[i], y[j], z[k]]
+        point = SVector(x[i], y[j], z[k])
         best_wall = -Inf
         best_radial = Inf
         best_axial = 0.0
@@ -133,7 +133,7 @@ function build_bifurcation_grid(params::GeometryParameters, numerics::NumericsPa
 end
 
 function orthonormal_basis(direction::SVector{3, Float64})
-    reference = abs(direction[3]) < 0.9 ? @SVector [0.0, 0.0, 1.0] : @SVector [0.0, 1.0, 0.0]
+    reference = abs(direction[3]) < 0.9 ? SVector(0.0, 0.0, 1.0) : SVector(0.0, 1.0, 0.0)
     n1 = normalize(cross(direction, reference))
     n2 = normalize(cross(direction, n1))
     return n1, n2
