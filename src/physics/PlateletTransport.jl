@@ -1,18 +1,12 @@
 initialize_platelets(grid::GeometryGrid, params::SimulationParameters) =
     params.transport.inlet_concentration .* Float64.(grid.mask)
 
-function inlet_region(grid::GeometryGrid, params::SimulationParameters)
-    cutoff = params.transport.inlet_buffer_fraction * params.geometry.inlet_length
-    return (grid.segment_id .== 1) .& (grid.axial_coordinate .<= cutoff)
-end
-
 function low_shear_switch(τ::Float64, params::SimulationParameters)
     ratio = (τ / params.clot.tau_dep)^params.clot.dep_hill
     return 1.0 / (1.0 + ratio)
 end
 
-function platelet_sink(C::Float64, φ::Float64, wall_distance::Float64, τ::Float64, params::SimulationParameters)
-    wall_weight = exp(-(wall_distance / params.clot.wall_bandwidth)^2)
+function platelet_sink(C::Float64, φ::Float64, wall_weight::Float64, τ::Float64, params::SimulationParameters)
     return params.transport.deposition_sink * C * wall_weight * low_shear_switch(τ, params) * (1.0 - φ)
 end
 
@@ -31,23 +25,20 @@ function stable_timestep(flow::FlowState, grid::GeometryGrid, params::Simulation
     return clamp(min(adv_dt, diff_dt, react_dt), params.numerics.min_dt, params.numerics.max_dt)
 end
 
-function update_platelets(
+function update_platelets!(
+    Cnew::Array{Float64, 3},
     C::Array{Float64, 3},
     φ::Array{Float64, 3},
     flow::FlowState,
     grid::GeometryGrid,
     params::SimulationParameters,
+    cache::GridIndexCache,
     dt::Float64,
 )
-    nx, ny, nz = size(C)
-    Cnew = copy(C)
+    copyto!(Cnew, C)
 
-    @inbounds for k in 2:(nz - 1), j in 2:(ny - 1), i in 2:(nx - 1)
-        if !grid.mask[i, j, k]
-            Cnew[i, j, k] = 0.0
-            continue
-        end
-
+    @inbounds for idx in cache.interior
+        i, j, k = Tuple(idx)
         c = C[i, j, k]
         c_im1 = grid.mask[i - 1, j, k] ? C[i - 1, j, k] : c
         c_ip1 = grid.mask[i + 1, j, k] ? C[i + 1, j, k] : c
@@ -70,15 +61,16 @@ function update_platelets(
             (c_jp1 - 2.0 * c + c_jm1) / grid.dy^2 +
             (c_kp1 - 2.0 * c + c_km1) / grid.dz^2
 
-        sink = platelet_sink(c, φ[i, j, k], grid.wall_distance[i, j, k], flow.shear[i, j, k], params)
-        Cnew[i, j, k] = clamp(
+        sink = platelet_sink(c, φ[idx], cache.wall_weight[idx], flow.shear[idx], params)
+        Cnew[idx] = clamp(
             c + dt * (params.transport.platelet_diffusivity * laplacian - advection - sink),
             0.0,
             params.transport.inlet_concentration,
         )
     end
 
-    Cnew[inlet_region(grid, params)] .= params.transport.inlet_concentration
-    Cnew[.!grid.mask] .= 0.0
+    @inbounds for idx in cache.inlet
+        Cnew[idx] = params.transport.inlet_concentration
+    end
     return Cnew
 end

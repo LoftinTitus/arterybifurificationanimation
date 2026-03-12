@@ -23,6 +23,15 @@ struct GeometryGrid
     bounds::NTuple{6, Float64}
 end
 
+struct GridIndexCache
+    active::Vector{CartesianIndex{3}}
+    interior::Vector{CartesianIndex{3}}
+    inlet::Vector{CartesianIndex{3}}
+    wall::Vector{CartesianIndex{3}}
+    wall_weight::Array{Float64, 3}
+    active_count::Int
+end
+
 function build_segments(params::GeometryParameters)
     θ = 0.5 * params.bifurcation_angle
     inlet_radius = 0.5 * params.inlet_diameter
@@ -174,6 +183,42 @@ surface_meshes(params::GeometryParameters; nθ::Int = 40, nz::Int = 28) =
     [tube_mesh(segment; nθ = nθ, nz = nz) for segment in build_segments(params)]
 
 cell_volume(grid::GeometryGrid) = grid.dx * grid.dy * grid.dz
+
+function build_index_cache(grid::GeometryGrid, params::SimulationParameters)
+    active = findall(grid.mask)
+    interior = CartesianIndex{3}[]
+    inlet = CartesianIndex{3}[]
+    wall = CartesianIndex{3}[]
+    wall_weight = zeros(Float64, size(grid.mask))
+
+    inlet_cutoff = params.transport.inlet_buffer_fraction * params.geometry.inlet_length
+    wall_cutoff = 2.0 * params.clot.wall_bandwidth
+    nx = length(grid.x)
+    ny = length(grid.y)
+    nz = length(grid.z)
+
+    sizehint!(interior, length(active))
+    sizehint!(inlet, length(active) ÷ 8)
+    sizehint!(wall, length(active) ÷ 4)
+
+    @inbounds for idx in active
+        i, j, k = Tuple(idx)
+        wall_distance = grid.wall_distance[idx]
+        wall_weight[idx] = exp(-(wall_distance / params.clot.wall_bandwidth)^2)
+
+        if 1 < i < nx && 1 < j < ny && 1 < k < nz
+            push!(interior, idx)
+        end
+        if grid.segment_id[idx] == 1 && grid.axial_coordinate[idx] <= inlet_cutoff
+            push!(inlet, idx)
+        end
+        if wall_distance <= wall_cutoff
+            push!(wall, idx)
+        end
+    end
+
+    return GridIndexCache(active, interior, inlet, wall, wall_weight, length(active))
+end
 
 function cell_centers(grid::GeometryGrid)
     points = Point3f[]

@@ -1,3 +1,9 @@
+struct SegmentCache
+    nominal_speeds::Vector{Float64}
+    nominal_drops::Vector{Float64}
+    junction_pressure::Float64
+end
+
 struct FlowState
     velocity::Array{Float64, 4}
     speed::Array{Float64, 3}
@@ -18,7 +24,7 @@ function segment_nominal_speeds(segments::Vector{BranchSegment}, flow::FlowParam
     return [flow.inlet_mean_velocity, branch_speeds[1], branch_speeds[2]]
 end
 
-function segment_base_pressures(segments::Vector{BranchSegment}, flow::FlowParameters, speeds::Vector{Float64})
+function segment_pressure_drops(segments::Vector{BranchSegment}, flow::FlowParameters, speeds::Vector{Float64})
     q = [
         speeds[1] * π * segments[1].radius^2,
         speeds[2] * π * segments[2].radius^2,
@@ -26,36 +32,61 @@ function segment_base_pressures(segments::Vector{BranchSegment}, flow::FlowParam
     ]
     drops = [8.0 * flow.viscosity * q[i] * segments[i].length / (π * segments[i].radius^4) for i in eachindex(segments)]
     junction_pressure = flow.outlet_pressure + max(drops[2], drops[3])
-    return [junction_pressure + drops[1], flow.outlet_pressure + drops[2], flow.outlet_pressure + drops[3]], drops
+    return junction_pressure, drops
 end
 
-function compute_flow_field(grid::GeometryGrid, phi::Array{Float64, 3}, params::SimulationParameters)
-    nx, ny, nz = size(phi)
-    velocity = zeros(Float64, nx, ny, nz, 3)
-    speed = zeros(Float64, nx, ny, nz)
-    pressure = fill(params.flow.outlet_pressure, nx, ny, nz)
-    shear = zeros(Float64, nx, ny, nz)
-    fluid_fraction = zeros(Float64, nx, ny, nz)
-
+function build_segment_cache(grid::GeometryGrid, params::SimulationParameters)
     nominal_speeds = segment_nominal_speeds(grid.segments, params.flow)
-    base_pressures, nominal_drops = segment_base_pressures(grid.segments, params.flow, nominal_speeds)
+    junction_pressure, nominal_drops = segment_pressure_drops(grid.segments, params.flow, nominal_speeds)
+    return SegmentCache(nominal_speeds, nominal_drops, junction_pressure)
+end
 
-    @inbounds for k in eachindex(grid.z), j in eachindex(grid.y), i in eachindex(grid.x)
-        if !grid.mask[i, j, k]
-            continue
-        end
+function allocate_flow_state(grid::GeometryGrid, params::SimulationParameters)
+    nx, ny, nz = size(grid.mask)
+    return FlowState(
+        zeros(Float64, nx, ny, nz, 3),
+        zeros(Float64, nx, ny, nz),
+        fill(params.flow.outlet_pressure, nx, ny, nz),
+        zeros(Float64, nx, ny, nz),
+        zeros(Float64, nx, ny, nz),
+    )
+end
 
-        seg_id = grid.segment_id[i, j, k]
+function compute_flow_field!(
+    state::FlowState,
+    grid::GeometryGrid,
+    phi::Array{Float64, 3},
+    params::SimulationParameters,
+    segment_cache::SegmentCache,
+    active_indices::Vector{CartesianIndex{3}},
+)
+    fill!(state.velocity, 0.0)
+    fill!(state.speed, 0.0)
+    fill!(state.pressure, params.flow.outlet_pressure)
+    fill!(state.shear, 0.0)
+    fill!(state.fluid_fraction, 0.0)
+
+    @inbounds for idx in active_indices
+        i, j, k = Tuple(idx)
+        seg_id = grid.segment_id[idx]
         segment = grid.segments[seg_id]
-        nominal_speed = nominal_speeds[seg_id]
+        nominal_speed = segment_cache.nominal_speeds[seg_id]
         open_fraction = clamp(
-            1.0 - params.clot.occlusion_sensitivity * phi[i, j, k],
+            1.0 - params.clot.occlusion_sensitivity * phi[idx],
             params.flow.minimum_open_fraction,
             1.0,
         )
-        fluid_fraction[i, j, k] = open_fraction
+        state.fluid_fraction[idx] = open_fraction
         effective_radius = segment.radius * sqrt(open_fraction)
-        radial = grid.centerline_distance[i, j, k]
+        radial = grid.centerline_distance[idx]
+
+        local_drop = segment_cache.nominal_drops[seg_id] / max(open_fraction^2, params.flow.minimum_open_fraction^2)
+        axial = grid.axial_coordinate[idx]
+        state.pressure[idx] = if seg_id == 1
+            segment_cache.junction_pressure + local_drop * (1.0 - axial / segment.length)
+        else
+            params.flow.outlet_pressure + local_drop * (1.0 - axial / segment.length)
+        end
 
         if radial >= effective_radius
             continue
@@ -64,21 +95,19 @@ function compute_flow_field(grid::GeometryGrid, phi::Array{Float64, 3}, params::
         speed_multiplier = min(params.flow.max_velocity_multiplier, open_fraction^(-0.5))
         mean_speed = nominal_speed * speed_multiplier
         local_speed = 2.0 * mean_speed * max(0.0, 1.0 - (radial / effective_radius)^2)
-        speed[i, j, k] = local_speed
-        velocity[i, j, k, 1] = local_speed * segment.direction[1]
-        velocity[i, j, k, 2] = local_speed * segment.direction[2]
-        velocity[i, j, k, 3] = local_speed * segment.direction[3]
-
-        local_drop = nominal_drops[seg_id] / max(open_fraction^2, params.flow.minimum_open_fraction^2)
-        pressure[i, j, k] = if seg_id == 1
-            junction_pressure = base_pressures[1] - nominal_drops[1]
-            junction_pressure + local_drop * (1.0 - grid.axial_coordinate[i, j, k] / segment.length)
-        else
-            params.flow.outlet_pressure + local_drop * (1.0 - grid.axial_coordinate[i, j, k] / segment.length)
-        end
-
-        shear[i, j, k] = 4.0 * params.flow.viscosity * mean_speed / max(effective_radius, eps())
+        state.speed[idx] = local_speed
+        state.velocity[i, j, k, 1] = local_speed * segment.direction[1]
+        state.velocity[i, j, k, 2] = local_speed * segment.direction[2]
+        state.velocity[i, j, k, 3] = local_speed * segment.direction[3]
+        state.shear[idx] = 4.0 * params.flow.viscosity * mean_speed / max(effective_radius, eps())
     end
 
-    return FlowState(velocity, speed, pressure, shear, fluid_fraction)
+    return state
+end
+
+function compute_flow_field(grid::GeometryGrid, phi::Array{Float64, 3}, params::SimulationParameters)
+    state = allocate_flow_state(grid, params)
+    segment_cache = build_segment_cache(grid, params)
+    active_indices = findall(grid.mask)
+    return compute_flow_field!(state, grid, phi, params, segment_cache, active_indices)
 end

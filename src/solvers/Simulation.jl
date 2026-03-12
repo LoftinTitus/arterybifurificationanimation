@@ -13,18 +13,23 @@ struct SimulationOutputs
     final_pressure::Array{Float32, 3}
 end
 
-function wall_mask(grid::GeometryGrid, params::SimulationParameters)
-    return grid.mask .& (grid.wall_distance .<= 2.0 * params.clot.wall_bandwidth)
-end
-
-function compute_metrics(φ::Array{Float64, 3}, flow::FlowState, grid::GeometryGrid, params::SimulationParameters)
+function compute_metrics(φ::Array{Float64, 3}, flow::FlowState, grid::GeometryGrid, cache::GridIndexCache)
     dV = cell_volume(grid)
-    baseline_volume = sum(grid.mask) * dV
-    clot_volume = sum(φ .* Float64.(grid.mask)) * dV
-    open_volume = sum(flow.fluid_fraction .* Float64.(grid.mask)) * dV
-    occlusion = 100.0 * (1.0 - open_volume / baseline_volume)
-    wm = wall_mask(grid, params)
-    mean_shear = any(wm) ? mean(flow.shear[wm]) : 0.0
+    clot_sum = 0.0
+    open_sum = 0.0
+    @inbounds for idx in cache.active
+        clot_sum += φ[idx]
+        open_sum += flow.fluid_fraction[idx]
+    end
+
+    wall_shear_sum = 0.0
+    @inbounds for idx in cache.wall
+        wall_shear_sum += flow.shear[idx]
+    end
+
+    clot_volume = clot_sum * dV
+    occlusion = 100.0 * (1.0 - open_sum / cache.active_count)
+    mean_shear = isempty(cache.wall) ? 0.0 : wall_shear_sum / length(cache.wall)
     return clot_volume, occlusion, mean_shear
 end
 
@@ -35,9 +40,14 @@ end
 
 function run_simulation(params::SimulationParameters = default_parameters())
     grid = build_bifurcation_grid(params.geometry, params.numerics)
+    cache = build_index_cache(grid, params)
+    segment_cache = build_segment_cache(grid, params)
     C = initialize_platelets(grid, params)
+    Cnext = similar(C)
     φ = initialize_clot(grid)
-    flow = compute_flow_field(grid, φ, params)
+    φnext = similar(φ)
+    flow = allocate_flow_state(grid, params)
+    compute_flow_field!(flow, grid, φ, params, segment_cache, cache.active)
 
     times = Float64[]
     clot_volume = Float64[]
@@ -51,15 +61,16 @@ function run_simulation(params::SimulationParameters = default_parameters())
     t = 0.0
     step_id = 0
     while t < params.numerics.tfinal
-        flow = compute_flow_field(grid, φ, params)
         dt = min(stable_timestep(flow, grid, params), params.numerics.tfinal - t)
-        C = update_platelets(C, φ, flow, grid, params, dt)
-        φ = update_clot(φ, C, flow, grid, params, dt)
+        update_platelets!(Cnext, C, φ, flow, grid, params, cache, dt)
+        update_clot!(φnext, φ, Cnext, flow, grid, params, cache, dt)
+        C, Cnext = Cnext, C
+        φ, φnext = φnext, φ
+        compute_flow_field!(flow, grid, φ, params, segment_cache, cache.active)
         t += dt
         step_id += 1
 
-        flow = compute_flow_field(grid, φ, params)
-        cv, occ, τm = compute_metrics(φ, flow, grid, params)
+        cv, occ, τm = compute_metrics(φ, flow, grid, cache)
         push!(times, t)
         push!(clot_volume, cv)
         push!(occlusion, occ)
