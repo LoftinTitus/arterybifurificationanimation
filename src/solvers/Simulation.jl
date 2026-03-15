@@ -7,6 +7,9 @@ struct SimulationOutputs
     mean_wall_shear::Vector{Float64}
     snapshot_times::Vector{Float64}
     platelet_snapshots::Vector{Array{Float32, 3}}
+    activated_platelet_snapshots::Vector{Array{Float32, 3}}
+    agonist_snapshots::Vector{Array{Float32, 3}}
+    bound_snapshots::Vector{Array{Float32, 3}}
     clot_snapshots::Vector{Array{Float32, 3}}
     shear_snapshots::Vector{Array{Float32, 3}}
     final_velocity::Array{Float32, 4}
@@ -38,16 +41,25 @@ function snapshot!(store::Vector{Array{Float32, 3}}, field::Array{Float64, 3})
     return nothing
 end
 
+function snapshot_total_platelets!(store::Vector{Array{Float32, 3}}, state::TransportState)
+    total = Array{Float32, 3}(undef, size(state.resting))
+    @inbounds for idx in eachindex(total)
+        total[idx] = Float32(state.resting[idx] + state.activated[idx])
+    end
+    push!(store, total)
+    return nothing
+end
+
 function run_simulation(params::SimulationParameters = default_parameters())
     grid = build_bifurcation_grid(params.geometry, params.numerics)
     cache = build_index_cache(grid, params)
     segment_cache = build_segment_cache(grid, params)
-    C = initialize_platelets(grid, params)
-    Cnext = similar(C)
-    φ = initialize_clot(grid)
-    φnext = similar(φ)
+    transport = initialize_transport_state(grid, params)
+    transport_next = allocate_transport_state(grid)
+    clot = initialize_clot_state(grid)
+    clot_next = allocate_clot_state(grid)
     flow = allocate_flow_state(grid, params)
-    compute_flow_field!(flow, grid, φ, params, segment_cache, cache.active)
+    compute_flow_field!(flow, grid, clot.solid, params, segment_cache, cache.active)
 
     times = Float64[]
     clot_volume = Float64[]
@@ -55,6 +67,9 @@ function run_simulation(params::SimulationParameters = default_parameters())
     mean_wall_shear = Float64[]
     snapshot_times = Float64[]
     platelet_snapshots = Array{Float32, 3}[]
+    activated_platelet_snapshots = Array{Float32, 3}[]
+    agonist_snapshots = Array{Float32, 3}[]
+    bound_snapshots = Array{Float32, 3}[]
     clot_snapshots = Array{Float32, 3}[]
     shear_snapshots = Array{Float32, 3}[]
 
@@ -62,15 +77,15 @@ function run_simulation(params::SimulationParameters = default_parameters())
     step_id = 0
     while t < params.numerics.tfinal
         dt = min(stable_timestep(flow, grid, params), params.numerics.tfinal - t)
-        update_platelets!(Cnext, C, φ, flow, grid, params, cache, dt)
-        update_clot!(φnext, φ, Cnext, flow, grid, params, cache, dt)
-        C, Cnext = Cnext, C
-        φ, φnext = φnext, φ
-        compute_flow_field!(flow, grid, φ, params, segment_cache, cache.active)
+        update_transport!(transport_next, transport, clot, flow, grid, params, cache, dt)
+        update_clot!(clot_next, clot, transport_next, flow, grid, params, cache, dt)
+        transport, transport_next = transport_next, transport
+        clot, clot_next = clot_next, clot
+        compute_flow_field!(flow, grid, clot.solid, params, segment_cache, cache.active)
         t += dt
         step_id += 1
 
-        cv, occ, τm = compute_metrics(φ, flow, grid, cache)
+        cv, occ, τm = compute_metrics(clot.solid, flow, grid, cache)
         push!(times, t)
         push!(clot_volume, cv)
         push!(occlusion, occ)
@@ -78,8 +93,11 @@ function run_simulation(params::SimulationParameters = default_parameters())
 
         if step_id == 1 || step_id % params.numerics.save_every == 0 || t >= params.numerics.tfinal
             push!(snapshot_times, t)
-            snapshot!(platelet_snapshots, C)
-            snapshot!(clot_snapshots, φ)
+            snapshot_total_platelets!(platelet_snapshots, transport)
+            snapshot!(activated_platelet_snapshots, transport.activated)
+            snapshot!(agonist_snapshots, transport.agonist)
+            snapshot!(bound_snapshots, clot.bound)
+            snapshot!(clot_snapshots, clot.solid)
             snapshot!(shear_snapshots, flow.shear)
         end
     end
@@ -93,6 +111,9 @@ function run_simulation(params::SimulationParameters = default_parameters())
         mean_wall_shear,
         snapshot_times,
         platelet_snapshots,
+        activated_platelet_snapshots,
+        agonist_snapshots,
+        bound_snapshots,
         clot_snapshots,
         shear_snapshots,
         Float32.(flow.velocity),

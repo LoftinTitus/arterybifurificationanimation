@@ -62,6 +62,12 @@ function plot_slice(results::SimulationOutputs; field::Symbol = :platelets, snap
     y_index = clamp(round(Int, results.params.visualization.slice_index * length(results.grid.y)), 1, length(results.grid.y))
     raw_field = if field == :platelets
         results.platelet_snapshots[idx]
+    elseif field == :activated
+        results.activated_platelet_snapshots[idx]
+    elseif field == :agonist
+        results.agonist_snapshots[idx]
+    elseif field == :bound
+        results.bound_snapshots[idx]
     elseif field == :shear
         results.shear_snapshots[idx]
     else
@@ -77,7 +83,7 @@ function plot_slice(results::SimulationOutputs; field::Symbol = :platelets, snap
         results.grid.x,
         results.grid.z,
         plane';
-        colormap = field == :shear ? :plasma : (field == :clot ? :reds : :viridis),
+        colormap = field == :shear ? :plasma : (field == :clot || field == :bound ? :reds : :viridis),
         interpolate = false,
     )
     Colorbar(fig[1, 2], hm)

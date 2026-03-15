@@ -1,35 +1,54 @@
 initialize_clot(grid::GeometryGrid) = zeros(Float64, size(grid.mask))
 
-function deposition_response(τ::Float64, params::SimulationParameters)
-    ratio = (τ / params.clot.tau_dep)^params.clot.dep_hill
-    return 1.0 / (1.0 + ratio)
+function initialize_clot_state(grid::GeometryGrid)
+    nx, ny, nz = size(grid.mask)
+    return ClotState(
+        zeros(Float64, nx, ny, nz),
+        zeros(Float64, nx, ny, nz),
+    )
 end
 
-function erosion_response(τ::Float64, params::SimulationParameters)
-    ratio = (τ / params.clot.tau_ero)^params.clot.ero_hill
-    return ratio / (1.0 + ratio)
+function allocate_clot_state(grid::GeometryGrid)
+    nx, ny, nz = size(grid.mask)
+    return ClotState(
+        zeros(Float64, nx, ny, nz),
+        zeros(Float64, nx, ny, nz),
+    )
 end
+
+deposition_response(τ::Float64, params::SimulationParameters) = low_shear_switch(τ, params)
+erosion_response(τ::Float64, params::SimulationParameters) = erosion_switch(τ, params)
 
 function update_clot!(
-    φnew::Array{Float64, 3},
-    φ::Array{Float64, 3},
-    C::Array{Float64, 3},
+    next::ClotState,
+    current::ClotState,
+    transport::TransportState,
     flow::FlowState,
     grid::GeometryGrid,
     params::SimulationParameters,
     cache::GridIndexCache,
     dt::Float64,
 )
-    fill!(φnew, 0.0)
+    bound = current.bound
+    φ = current.solid
+    bound_next = next.bound
+    φ_next = next.solid
+    fill!(bound_next, 0.0)
+    fill!(φ_next, 0.0)
 
     @inbounds for idx in cache.active
+        τ = flow.shear[idx]
         w = cache.wall_weight[idx]
-        fτ = deposition_response(flow.shear[idx], params)
-        gτ = erosion_response(flow.shear[idx], params)
-        growth = params.clot.k_dep * C[idx] * w * fτ * (1.0 - φ[idx])
-        erosion = params.clot.k_ero * gτ * φ[idx]
-        φnew[idx] = clamp(φ[idx] + dt * (growth - erosion), 0.0, 1.0)
+        pa = transport.activated[idx]
+        local_bound = bound[idx]
+        solid = φ[idx]
+        bind = binding_rate(pa, local_bound, solid, w, τ, params)
+        detach = bound_detachment_rate(local_bound, τ, params)
+        compact = compaction_rate(local_bound, solid, w, params)
+        erosion = params.clot.k_ero * erosion_response(τ, params) * solid
+        bound_next[idx] = clamp(local_bound + dt * (bind - detach - compact), 0.0, params.clot.bound_capacity)
+        φ_next[idx] = clamp(solid + dt * (compact - erosion), 0.0, 1.0)
     end
 
-    return φnew
+    return next
 end

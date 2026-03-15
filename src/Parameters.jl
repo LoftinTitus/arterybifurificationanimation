@@ -18,8 +18,16 @@ end
 
 Base.@kwdef struct TransportParameters
     platelet_diffusivity::Float64 = 2.5e-10
+    activated_diffusivity::Float64 = 2.8e-10
+    agonist_diffusivity::Float64 = 1.1e-9
+    shear_diffusivity::Float64 = 4.0e-11
     inlet_concentration::Float64 = 1.0
+    inlet_activated_fraction::Float64 = 0.0
+    inlet_agonist::Float64 = 0.0
     deposition_sink::Float64 = 0.18
+    platelet_porosity_exponent::Float64 = 1.35
+    agonist_porosity_exponent::Float64 = 0.85
+    agonist_decay::Float64 = 0.45
     inlet_buffer_fraction::Float64 = 0.08
 end
 
@@ -33,6 +41,17 @@ Base.@kwdef struct ClotParameters
     wall_bandwidth::Float64 = 4.5e-4
     occlusion_sensitivity::Float64 = 0.95
     solid_threshold::Float64 = 0.92
+    k_activate_wall::Float64 = 0.22
+    k_activate_shear::Float64 = 0.10
+    tau_activate::Float64 = 2.0
+    k_activate_agonist::Float64 = 0.35
+    agonist_halfmax::Float64 = 0.12
+    binding_ratio::Float64 = 1.0
+    compaction_ratio::Float64 = 0.80
+    detachment_ratio::Float64 = 0.50
+    agonist_release_ratio::Float64 = 0.45
+    aggregation_site_strength::Float64 = 0.65
+    bound_capacity::Float64 = 1.0
 end
 
 Base.@kwdef struct NumericsParameters
