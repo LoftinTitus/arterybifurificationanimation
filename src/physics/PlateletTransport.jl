@@ -60,7 +60,8 @@ end
     φ::Float64,
     params::SimulationParameters,
 )
-    return clamp(wall_weight + params.clot.aggregation_site_strength * (bound + φ), 0.0, 1.0)
+    amplification = 1.0 + params.clot.aggregation_site_strength * (bound + φ)
+    return clamp(wall_weight * amplification, 0.0, 1.0)
 end
 
 @inline function platelet_effective_diffusivity(

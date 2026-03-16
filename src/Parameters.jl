@@ -52,6 +52,7 @@ Base.@kwdef struct ClotParameters
     agonist_release_ratio::Float64 = 0.45
     aggregation_site_strength::Float64 = 0.65
     bound_capacity::Float64 = 1.0
+    junction_length_scale::Float64 = 2.5e-3
 end
 
 Base.@kwdef struct NumericsParameters

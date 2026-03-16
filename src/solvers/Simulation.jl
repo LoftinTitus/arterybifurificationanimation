@@ -50,7 +50,11 @@ function snapshot_total_platelets!(store::Vector{Array{Float32, 3}}, state::Tran
     return nothing
 end
 
-function run_simulation(params::SimulationParameters = default_parameters())
+function run_simulation(
+    params::SimulationParameters = default_parameters();
+    show_progress::Bool = false,
+    progress_interval::Float64 = 0.05,
+)
     grid = build_bifurcation_grid(params.geometry, params.numerics)
     cache = build_index_cache(grid, params)
     segment_cache = build_segment_cache(grid, params)
@@ -75,6 +79,11 @@ function run_simulation(params::SimulationParameters = default_parameters())
 
     t = 0.0
     step_id = 0
+    next_progress_report = progress_interval
+    start_time = time()
+    if show_progress
+        println("Simulation progress: 0.0% (t = 0.00 / $(round(params.numerics.tfinal, digits = 2)) s)")
+    end
     while t < params.numerics.tfinal
         dt = min(stable_timestep(flow, grid, params), params.numerics.tfinal - t)
         update_transport!(transport_next, transport, clot, flow, grid, params, cache, dt)
@@ -99,6 +108,19 @@ function run_simulation(params::SimulationParameters = default_parameters())
             snapshot!(bound_snapshots, clot.bound)
             snapshot!(clot_snapshots, clot.solid)
             snapshot!(shear_snapshots, flow.shear)
+        end
+
+        if show_progress
+            progress = t / params.numerics.tfinal
+            if progress >= next_progress_report || t >= params.numerics.tfinal
+                elapsed = time() - start_time
+                println(
+                    "Simulation progress: $(round(100 * progress, digits = 1))% " *
+                    "(t = $(round(t, digits = 2)) / $(round(params.numerics.tfinal, digits = 2)) s, " *
+                    "step = $(step_id), elapsed = $(round(elapsed, digits = 1)) s)",
+                )
+                next_progress_report += progress_interval
+            end
         end
     end
 

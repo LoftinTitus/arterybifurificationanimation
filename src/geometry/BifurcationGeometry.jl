@@ -184,6 +184,17 @@ surface_meshes(params::GeometryParameters; nθ::Int = 40, nz::Int = 28) =
 
 cell_volume(grid::GeometryGrid) = grid.dx * grid.dy * grid.dz
 
+@inline function bifurcation_focus_weight(
+    segment_id::Int,
+    axial_coordinate::Float64,
+    grid::GeometryGrid,
+    params::SimulationParameters,
+)
+    segment = grid.segments[segment_id]
+    junction_distance = segment_id == 1 ? segment.length - axial_coordinate : axial_coordinate
+    return exp(-(junction_distance / params.clot.junction_length_scale)^2)
+end
+
 function build_index_cache(grid::GeometryGrid, params::SimulationParameters)
     active = findall(grid.mask)
     interior = CartesianIndex{3}[]
@@ -204,7 +215,14 @@ function build_index_cache(grid::GeometryGrid, params::SimulationParameters)
     @inbounds for idx in active
         i, j, k = Tuple(idx)
         wall_distance = grid.wall_distance[idx]
-        wall_weight[idx] = exp(-(wall_distance / params.clot.wall_bandwidth)^2)
+        wall_profile = exp(-(wall_distance / params.clot.wall_bandwidth)^2)
+        junction_focus = bifurcation_focus_weight(
+            grid.segment_id[idx],
+            grid.axial_coordinate[idx],
+            grid,
+            params,
+        )
+        wall_weight[idx] = wall_profile * junction_focus
 
         if 1 < i < nx && 1 < j < ny && 1 < k < nz
             push!(interior, idx)
