@@ -32,3 +32,5 @@ animate_clot_growth(results, joinpath(output_dir, "clot_growth.mp4"))
 
 println("Simulation complete.")
 println("Outputs written to: $(output_dir)")
+
+    
