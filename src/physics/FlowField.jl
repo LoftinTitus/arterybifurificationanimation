@@ -66,7 +66,8 @@ function compute_flow_field!(
     fill!(state.shear, 0.0)
     fill!(state.fluid_fraction, 0.0)
 
-    @inbounds for idx in active_indices
+    @inbounds Threads.@threads for n in eachindex(active_indices)
+        idx = active_indices[n]
         i, j, k = Tuple(idx)
         seg_id = grid.segment_id[idx]
         segment = grid.segments[seg_id]

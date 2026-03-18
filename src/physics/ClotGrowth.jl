@@ -36,7 +36,8 @@ function update_clot!(
     fill!(bound_next, 0.0)
     fill!(φ_next, 0.0)
 
-    @inbounds for idx in cache.active
+    @inbounds Threads.@threads for n in eachindex(cache.active)
+        idx = cache.active[n]
         τ = flow.shear[idx]
         w = cache.wall_weight[idx]
         pa = transport.activated[idx]

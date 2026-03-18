@@ -175,7 +175,8 @@ function update_transport!(
     bound = clot.bound
     φ = clot.solid
 
-    @inbounds for idx in cache.interior
+    @inbounds Threads.@threads for n in eachindex(cache.interior)
+        idx = cache.interior[n]
         i, j, k = Tuple(idx)
         pr = resting[idx]
         pa = activated[idx]

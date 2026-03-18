@@ -64,7 +64,7 @@ Base.@kwdef struct NumericsParameters
     diffusion_cfl::Float64 = 0.20
     min_dt::Float64 = 1.0e-3
     max_dt::Float64 = 5.0e-2
-    save_every::Int = 8
+    save_every::Int = 32
 end
 
 Base.@kwdef struct VisualizationParameters

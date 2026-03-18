@@ -6,12 +6,12 @@ struct SimulationOutputs
     occlusion::Vector{Float64}
     mean_wall_shear::Vector{Float64}
     snapshot_times::Vector{Float64}
-    platelet_snapshots::Vector{Array{Float32, 3}}
-    activated_platelet_snapshots::Vector{Array{Float32, 3}}
-    agonist_snapshots::Vector{Array{Float32, 3}}
-    bound_snapshots::Vector{Array{Float32, 3}}
     clot_snapshots::Vector{Array{Float32, 3}}
-    shear_snapshots::Vector{Array{Float32, 3}}
+    final_platelets::Array{Float32, 3}
+    final_activated::Array{Float32, 3}
+    final_agonist::Array{Float32, 3}
+    final_bound::Array{Float32, 3}
+    final_shear::Array{Float32, 3}
     final_velocity::Array{Float32, 4}
     final_pressure::Array{Float32, 3}
 end
@@ -41,13 +41,12 @@ function snapshot!(store::Vector{Array{Float32, 3}}, field::Array{Float64, 3})
     return nothing
 end
 
-function snapshot_total_platelets!(store::Vector{Array{Float32, 3}}, state::TransportState)
+function total_platelets_snapshot(state::TransportState)
     total = Array{Float32, 3}(undef, size(state.resting))
     @inbounds for idx in eachindex(total)
         total[idx] = Float32(state.resting[idx] + state.activated[idx])
     end
-    push!(store, total)
-    return nothing
+    return total
 end
 
 function run_simulation(
@@ -70,12 +69,7 @@ function run_simulation(
     occlusion = Float64[]
     mean_wall_shear = Float64[]
     snapshot_times = Float64[]
-    platelet_snapshots = Array{Float32, 3}[]
-    activated_platelet_snapshots = Array{Float32, 3}[]
-    agonist_snapshots = Array{Float32, 3}[]
-    bound_snapshots = Array{Float32, 3}[]
     clot_snapshots = Array{Float32, 3}[]
-    shear_snapshots = Array{Float32, 3}[]
 
     t = 0.0
     step_id = 0
@@ -102,12 +96,7 @@ function run_simulation(
 
         if step_id == 1 || step_id % params.numerics.save_every == 0 || t >= params.numerics.tfinal
             push!(snapshot_times, t)
-            snapshot_total_platelets!(platelet_snapshots, transport)
-            snapshot!(activated_platelet_snapshots, transport.activated)
-            snapshot!(agonist_snapshots, transport.agonist)
-            snapshot!(bound_snapshots, clot.bound)
             snapshot!(clot_snapshots, clot.solid)
-            snapshot!(shear_snapshots, flow.shear)
         end
 
         if show_progress
@@ -132,12 +121,12 @@ function run_simulation(
         occlusion,
         mean_wall_shear,
         snapshot_times,
-        platelet_snapshots,
-        activated_platelet_snapshots,
-        agonist_snapshots,
-        bound_snapshots,
         clot_snapshots,
-        shear_snapshots,
+        total_platelets_snapshot(transport),
+        Float32.(transport.activated),
+        Float32.(transport.agonist),
+        Float32.(clot.bound),
+        Float32.(flow.shear),
         Float32.(flow.velocity),
         Float32.(flow.pressure),
     )

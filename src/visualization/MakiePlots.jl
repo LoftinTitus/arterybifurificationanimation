@@ -1,16 +1,30 @@
 const VOXEL_MARKER = Rect3f(Point3f(-0.5, -0.5, -0.5), Vec3f(1.0, 1.0, 1.0))
 
-function clot_voxels(grid::GeometryGrid, φ::AbstractArray{<:Real, 3}, threshold::Float64)
-    positions = Point3f[]
-    colors = RGBAf[]
-    @inbounds for k in eachindex(grid.z), j in eachindex(grid.y), i in eachindex(grid.x)
-        value = Float64(φ[i, j, k])
-        if grid.mask[i, j, k] && value >= threshold
-            push!(positions, Point3f(grid.x[i], grid.y[j], grid.z[k]))
-            push!(colors, RGBAf(0.82, 0.08, 0.10, clamp(0.25 + 0.75 * value, 0.25, 0.95)))
-        end
+const TRANSPARENT_COLOR = RGBAf(0.82, 0.08, 0.10, 0.0)
+
+function clot_voxel_cache(grid::GeometryGrid)
+    active = findall(grid.mask)
+    positions = Vector{Point3f}(undef, length(active))
+    @inbounds for n in eachindex(active)
+        i, j, k = Tuple(active[n])
+        positions[n] = Point3f(grid.x[i], grid.y[j], grid.z[k])
     end
-    return positions, colors
+    return active, positions
+end
+
+function update_clot_colors!(
+    colors::Vector{RGBAf},
+    active::Vector{CartesianIndex{3}},
+    φ::AbstractArray{<:Real, 3},
+    threshold::Float64,
+)
+    @inbounds Threads.@threads for n in eachindex(active)
+        value = Float32(φ[active[n]])
+        colors[n] = value >= threshold ?
+            RGBAf(0.82, 0.08, 0.10, clamp(0.25f0 + 0.75f0 * value, 0.25f0, 0.95f0)) :
+            TRANSPARENT_COLOR
+    end
+    return colors
 end
 
 function plot_geometry(params::SimulationParameters = default_parameters())
@@ -43,7 +57,9 @@ function plot_fields(results::SimulationOutputs; snapshot_index::Int = length(re
     for mesh_data in surface_meshes(results.params.geometry)
         mesh!(ax, mesh_data, color = RGBAf(0.65, 0.82, 0.98, results.params.visualization.wall_alpha))
     end
-    positions, colors = clot_voxels(results.grid, φ, results.params.visualization.clot_threshold)
+    active, positions = clot_voxel_cache(results.grid)
+    colors = fill(TRANSPARENT_COLOR, length(active))
+    update_clot_colors!(colors, active, φ, results.params.visualization.clot_threshold)
     meshscatter!(
         ax,
         positions;
@@ -61,17 +77,19 @@ function plot_slice(results::SimulationOutputs; field::Symbol = :platelets, snap
     idx = clamp(snapshot_index, 1, length(results.clot_snapshots))
     y_index = clamp(round(Int, results.params.visualization.slice_index * length(results.grid.y)), 1, length(results.grid.y))
     raw_field = if field == :platelets
-        results.platelet_snapshots[idx]
+        results.final_platelets
     elseif field == :activated
-        results.activated_platelet_snapshots[idx]
+        results.final_activated
     elseif field == :agonist
-        results.agonist_snapshots[idx]
+        results.final_agonist
     elseif field == :bound
-        results.bound_snapshots[idx]
+        results.final_bound
     elseif field == :shear
-        results.shear_snapshots[idx]
-    else
+        results.final_shear
+    elseif field == :clot
         results.clot_snapshots[idx]
+    else
+        results.final_bound
     end
     plane = Array(raw_field[:, y_index, :])
     mask = Array(results.grid.mask[:, y_index, :])
@@ -97,25 +115,26 @@ function animate_clot_growth(results::SimulationOutputs, filepath::AbstractStrin
         mesh!(ax, mesh_data, color = RGBAf(0.65, 0.82, 0.98, results.params.visualization.wall_alpha))
     end
 
-    positions0, colors0 = clot_voxels(results.grid, results.clot_snapshots[1], results.params.visualization.clot_threshold)
-    pos_obs = Observable(positions0)
-    color_obs = Observable(colors0)
+    active, positions = clot_voxel_cache(results.grid)
+    colors = fill(TRANSPARENT_COLOR, length(active))
+    update_clot_colors!(colors, active, results.clot_snapshots[1], results.params.visualization.clot_threshold)
+    color_obs = Observable(colors)
     meshscatter!(
         ax,
-        pos_obs;
+        positions;
         marker = VOXEL_MARKER,
         markersize = Vec3f(results.grid.dx, results.grid.dy, results.grid.dz),
         color = color_obs,
     )
 
     record(fig, filepath, eachindex(results.clot_snapshots)) do frame
-        positions, colors = clot_voxels(
-            results.grid,
+        update_clot_colors!(
+            colors,
+            active,
             results.clot_snapshots[frame],
             results.params.visualization.clot_threshold,
         )
-        pos_obs[] = positions
-        color_obs[] = colors
+        notify(color_obs)
         ax.azimuth[] = 0.30 + 0.85 * (frame - 1) / max(length(results.clot_snapshots) - 1, 1)
         ax.elevation[] = 0.30
     end
